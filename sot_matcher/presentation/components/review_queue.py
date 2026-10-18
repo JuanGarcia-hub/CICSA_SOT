@@ -207,6 +207,9 @@ def render_feedback_form(
     key_suffix: str,
 ) -> None:
     """Formulario para HU-01/02/03 - Registrar decisión."""
+    # Pre-rellenar revisor desde session_state
+    default_reviewer = st.session_state.get("reviewer_id", "")
+
     with st.form(f"feedback_form_{key_suffix}"):
         decision = st.radio(
             "Tu decisión",
@@ -236,9 +239,11 @@ def render_feedback_form(
         )
 
         reviewer = st.text_input(
-            "Tu ID / nombre (opcional)",
+            "Tu ID / nombre",
+            value=default_reviewer,
             placeholder="ej. analista_01",
             key=f"reviewer_{key_suffix}",
+            help="Se guarda automáticamente desde la barra lateral",
         )
 
         submitted = st.form_submit_button(
