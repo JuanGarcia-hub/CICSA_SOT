@@ -1,0 +1,1 @@
+"""Capa de dominio: lógica pura de negocio sin dependencias de I/O."""

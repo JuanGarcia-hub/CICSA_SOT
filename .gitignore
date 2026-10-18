@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.dist/
+build/
+dist/
+*.egg-info/
+
+# IDE / Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+outputs/
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+!.gitkeep
+
+# Model cache (HuggingFace / sentence-transformers)
+# Descomenta si NO quieres subir el modelo cacheado (pesado ~500MB)
+# ~/.cache/huggingface/
+# ~/.cache/torch/
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local

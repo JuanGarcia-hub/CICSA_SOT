@@ -1,0 +1,1 @@
+"""Adaptadores de I/O para libros Excel y modelo de embeddings."""

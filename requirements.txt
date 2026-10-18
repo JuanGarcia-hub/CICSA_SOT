@@ -1,0 +1,10 @@
+# Motor de lectura xlsx rápido (Rust). Si no está, se usa openpyxl.
+python-calamine>=0.2
+pandas>=2.0
+openpyxl>=3.1
+sentence-transformers>=3.0
+streamlit>=1.38
+
+# Calidad y pruebas
+pytest>=8.0
+ruff>=0.5

@@ -1,0 +1,1 @@
+"""Fachada (Facade) que orquesta lectura, preparación y cruce del pipeline."""
