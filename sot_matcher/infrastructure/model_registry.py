@@ -27,7 +27,7 @@ class FileModelRegistry:
 
     def _init_table(self):
         with self._conn() as conn:
-            conn.execute("""
+            conn.executescript("""
                 CREATE TABLE IF NOT EXISTS model_registry (
                     model_version TEXT PRIMARY KEY,
                     artifact_path TEXT NOT NULL,
