@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Cruce seguro de SOTs y bitácoras
 
 MVP en Streamlit para relacionar SOTs pendientes con bitácoras operativas, privilegiando precisión sobre cobertura: un caso sin evidencia suficiente queda como `PENDIENTE`.
@@ -85,3 +86,6 @@ python -m pytest tests -q -m "not smoke"   # omite las pruebas con modelo real
 ```
 
 Cubre normalización, fechas, incidencias, materiales, prioridad de ID exacto, filtro temporal, ambigüedad semántica, caché de embeddings y la red de regresión contra los archivos reales (hojas detectadas, volúmenes y conteos de estado).
+=======
+# CICSA_SOT
+>>>>>>> origin/main
