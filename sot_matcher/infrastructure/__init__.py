@@ -34,6 +34,13 @@ from .calibration import (
     plot_reliability_diagram,
     compare_calibration_methods,
 )
+from .active_learning import (
+    ActiveLearningLoop,
+    ActiveLearningConfig,
+    ActiveLearningStrategy,
+    AnnotationTask,
+    ActiveLearningReport,
+)
 
 __all__ = [
     "read_excel",
@@ -69,4 +76,9 @@ __all__ = [
     "compute_calibration_metrics",
     "plot_reliability_diagram",
     "compare_calibration_methods",
+    "ActiveLearningLoop",
+    "ActiveLearningConfig",
+    "ActiveLearningStrategy",
+    "AnnotationTask",
+    "ActiveLearningReport",
 ]

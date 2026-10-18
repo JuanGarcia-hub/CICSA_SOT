@@ -341,7 +341,110 @@ def cmd_build_dataset(args: argparse.Namespace) -> int:
     return 0
 
 
-def main() -> int:
+def cmd_active_export(args: argparse.Namespace) -> int:
+    """Exporta casos PENDIENTE para anotación humana (Active Learning)."""
+    repo, extractor, retriever, classifier, registry = build_pipeline_components(
+        args.db, args.models_dir
+    )
+
+    # Cargar datos preparados
+    print(f"📂 Cargando datos desde {args.sot_file} y {args.log_file}...")
+    prepared_sots, prepared_logs = load_prepared_data(
+        args.sot_file, args.log_file, args.sot_sheet, args.log_sheet
+    )
+    print(f"   SOTs: {len(prepared_sots)}, Bitácoras: {len(prepared_logs)}")
+
+    # Ejecutar cruce para obtener resultados del motor actual
+    from sot_matcher import CrossingPipeline, MatchingSettings
+    pipeline = CrossingPipeline()
+    prepared = pipeline.prepare(
+        Path(args.sot_file).read_bytes(),
+        Path(args.log_file).read_bytes(),
+        use_column_dates=True,
+        sot_sheet=args.sot_sheet,
+        log_sheet=args.log_sheet,
+    )
+    results = pipeline.cross(prepared, settings=MatchingSettings(threshold=0.78))
+    results_df = results.results
+
+    # Configurar active learning
+    from sot_matcher.infrastructure.active_learning import (
+        ActiveLearningLoop,
+        ActiveLearningConfig,
+        ActiveLearningStrategy,
+    )
+
+    al_loop = ActiveLearningLoop(repo, extractor, retriever, classifier, registry, None)
+
+    strategy_map = {
+        "uncertainty": ActiveLearningStrategy.UNCERTAINTY,
+        "margin": ActiveLearningStrategy.MARGIN,
+        "entropy": ActiveLearningStrategy.ENTROPY,
+        "diversity": ActiveLearningStrategy.DIVERSITY,
+        "hybrid": ActiveLearningStrategy.HYBRID,
+        "least_confident": ActiveLearningStrategy.LEAST_CONFIDENT,
+        "disagreement": ActiveLearningStrategy.DISAGREEMENT,
+    }
+
+    config = ActiveLearningConfig(
+        strategy=strategy_map[args.strategy],
+        batch_size=args.batch_size,
+        top_k_candidates=args.top_k,
+    )
+
+    print(f"🔍 Exportando casos PENDIENTE con estrategia '{args.strategy}'...")
+    report = al_loop.export_pending_for_annotation(
+        prepared_sots, prepared_logs, results_df, config, args.output
+    )
+
+    print(f"✅ Exportación completada:")
+    print(f"   Iteración: {report.iteration}")
+    print(f"   Casos exportados: {report.exported_count}")
+    print(f"   Estrategia: {report.strategy.value}")
+    print(f"   Incertidumbre media: {report.uncertainty_stats.get('mean', 0):.3f}")
+    print(f"   Archivos generados: {args.output}.csv, {args.output}.json")
+
+    return 0
+
+
+def cmd_active_import(args: argparse.Namespace) -> int:
+    """Importa anotaciones desde CSV/JSON."""
+    repo, extractor, retriever, classifier, registry = build_pipeline_components(
+        args.db, args.models_dir
+    )
+
+    from sot_matcher.infrastructure.active_learning import ActiveLearningLoop
+    al_loop = ActiveLearningLoop(repo, extractor, retriever, classifier, registry, None)
+
+    print(f"📥 Importando anotaciones desde {args.file}...")
+    count = al_loop.import_annotations(args.file, args.reviewer)
+    print(f"✅ {count} anotaciones importadas")
+
+    return 0
+
+
+def cmd_active_retrain(args: argparse.Namespace) -> int:
+    """Re-entrena modelo con nuevos datos de feedback."""
+    repo, extractor, retriever, classifier, registry = build_pipeline_components(
+        args.db, args.models_dir
+    )
+
+    from sot_matcher.infrastructure.active_learning import ActiveLearningLoop
+    al_loop = ActiveLearningLoop(repo, extractor, retriever, classifier, registry, None)
+
+    print("🔄 Re-entrenando modelo con feedback actualizado...")
+    try:
+        pipeline = al_loop.retrain_incremental()
+        print(f"✅ Re-entrenamiento completado")
+
+        if args.activate:
+            # El modelo se registra como CANDIDATE, activar manualmente si se desea
+            print("ℹ️ Modelo registrado como CANDIDATE. Usa 'activate' para poner en producción.")
+
+        return 0
+    except ValueError as e:
+        print(f"❌ Error: {e}")
+        return 1
     parser = argparse.ArgumentParser(
         prog="sot-matcher-feedback",
         description="CLI para feedback supervisado en SOT Matcher",
@@ -393,6 +496,133 @@ def main() -> int:
     build_p.add_argument("--sot-sheet", help="Hoja específica SOT")
     build_p.add_argument("--log-sheet", help="Hoja específica bitácoras")
     build_p.set_defaults(func=cmd_build_dataset)
+
+    # active-learning export
+    al_export_p = subparsers.add_parser("active-export", help="Exportar casos PENDIENTE para anotación (Active Learning)")
+    al_export_p.add_argument("--sot-file", required=True, help="Archivo Excel SOT")
+    al_export_p.add_argument("--log-file", required=True, help="Archivo Excel bitácoras")
+    al_export_p.add_argument("--sot-sheet", help="Hoja específica SOT")
+    al_export_p.add_argument("--log-sheet", help="Hoja específica bitácoras")
+    al_export_p.add_argument("--output", required=True, help="Ruta base de salida (se crea .csv y .json)")
+    al_export_p.add_argument("--strategy", choices=["uncertainty", "margin", "entropy", "diversity", "hybrid", "least_confident", "disagreement"], default="hybrid", help="Estrategia de selección")
+    al_export_p.add_argument("--batch-size", type=int, default=50, help="Casos a exportar")
+    al_export_p.add_argument("--top-k", type=int, default=5, help="Candidatos por SOT")
+    al_export_p.set_defaults(func=cmd_active_export)
+
+    # active-learning import
+    al_import_p = subparsers.add_parser("active-import", help="Importar anotaciones desde CSV/JSON")
+    al_import_p.add_argument("file", help="Archivo CSV o JSON con anotaciones")
+    al_import_p.add_argument("--reviewer", default="active_learning", help="ID del revisor")
+    al_import_p.set_defaults(func=cmd_active_import)
+
+    # active-learning retrain
+    al_retrain_p = subparsers.add_parser("active-retrain", help="Re-entrenar modelo con nuevos datos")
+    al_retrain_p.add_argument("--sot-file", help="Archivo Excel SOT")
+    al_retrain_p.add_argument("--log-file", help="Archivo Excel bitácoras")
+    al_retrain_p.add_argument("--sot-sheet", help="Hoja específica SOT")
+    al_retrain_p.add_argument("--log-sheet", help="Hoja específica bitácoras")
+    al_retrain_p.add_argument("--activate", action="store_true", help="Activar si cumple umbrales")
+    al_retrain_p.set_defaults(func=cmd_active_retrain)
+
+    # list
+    list_p = subparsers.add_parser("list", help="Listar modelos registrados")
+    list_p.add_argument("--status", choices=["CANDIDATE", "APPROVED", "ACTIVE", "REJECTED", "RETIRED"], help="Filtrar por estado")
+    list_p.set_defaults(func=cmd_list_models)
+
+    # activate
+    act_p = subparsers.add_parser("activate", help="Activar modelo en producción")
+    act_p.add_argument("model", help="Versión del modelo a activar")
+    act_p.set_defaults(func=cmd_activate)
+
+    # rollback
+    rb_p = subparsers.add_parser("rollback", help="Rollback a modelo anterior")
+    rb_p.add_argument("model", help="Versión del modelo anterior")
+    rb_p.set_defaults(func=cmd_rollback)
+
+    args = parser.parse_args()
+    return args.func(args)
+
+
+def main() -> int:
+    """Entry point for CLI."""
+    parser = argparse.ArgumentParser(
+        prog="sot-matcher-feedback",
+        description="CLI para feedback supervisado en SOT Matcher",
+    )
+    parser.add_argument("--db", default="sot_matcher_feedback.db", help="Ruta a SQLite DB")
+    parser.add_argument("--models-dir", default="models", help="Directorio de modelos")
+    parser.add_argument("--version", default="1.0", help="Versión del esquema de features")
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # train
+    train_p = subparsers.add_parser("train", help="Entrenar nuevo modelo")
+    train_p.add_argument("--sot-file", help="Archivo Excel SOT (para features reales)")
+    train_p.add_argument("--log-file", help="Archivo Excel bitácoras (para features reales)")
+    train_p.add_argument("--sot-sheet", help="Hoja específica SOT")
+    train_p.add_argument("--log-sheet", help="Hoja específica bitácoras")
+    train_p.add_argument("--min-positives", type=int, default=10, help="Mínimo pares positivos")
+    train_p.add_argument("--min-negatives", type=int, default=10, help="Mínimo pares negativos")
+    train_p.add_argument("--test-size", type=float, default=0.2, help="Tamaño test set")
+    train_p.add_argument("--val-size", type=float, default=0.1, help="Tamaño validation set")
+    train_p.add_argument("--seed", type=int, default=42, help="Random seed")
+    train_p.add_argument("--no-calibrate", action="store_true", help="Desactivar calibración de probabilidades")
+    train_p.add_argument("--calibration-method", choices=["isotonic", "platt", "none"], default="isotonic")
+    train_p.add_argument("--precision-threshold", type=float, default=0.85, help="Umbral precision para activar")
+    train_p.add_argument("--recall-threshold", type=float, default=0.70, help="Umbral recall para activar")
+    train_p.add_argument("--activate", action="store_true", help="Activar si cumple umbrales")
+    train_p.set_defaults(func=cmd_train)
+
+    # evaluate
+    eval_p = subparsers.add_parser("evaluate", help="Evaluar modelo existente")
+    eval_p.add_argument("model", help="Versión del modelo a evaluar")
+    eval_p.add_argument("--activate", action="store_true", help="Activar si recomendación es ACTIVATE")
+    eval_p.set_defaults(func=cmd_evaluate)
+
+    # shadow-eval
+    shadow_p = subparsers.add_parser("shadow-eval", help="Evaluación en sombra vs motor actual")
+    shadow_p.add_argument("model", help="Versión del modelo a evaluar")
+    shadow_p.add_argument("--sot-file", required=True, help="Archivo Excel SOT")
+    shadow_p.add_argument("--log-file", required=True, help="Archivo Excel bitácoras")
+    shadow_p.add_argument("--sot-sheet", help="Hoja específica SOT")
+    shadow_p.add_argument("--log-sheet", help="Hoja específica bitácoras")
+    shadow_p.add_argument("--output", help="Archivo CSV para reporte detallado")
+    shadow_p.set_defaults(func=cmd_shadow_eval)
+
+    # build-dataset
+    build_p = subparsers.add_parser("build-dataset", help="Construir reporte de dataset sin entrenar")
+    build_p.add_argument("--sot-file", help="Archivo Excel SOT")
+    build_p.add_argument("--log-file", help="Archivo Excel bitácoras")
+    build_p.add_argument("--sot-sheet", help="Hoja específica SOT")
+    build_p.add_argument("--log-sheet", help="Hoja específica bitácoras")
+    build_p.set_defaults(func=cmd_build_dataset)
+
+    # active-learning export
+    al_export_p = subparsers.add_parser("active-export", help="Exportar casos PENDIENTE para anotación (Active Learning)")
+    al_export_p.add_argument("--sot-file", required=True, help="Archivo Excel SOT")
+    al_export_p.add_argument("--log-file", required=True, help="Archivo Excel bitácoras")
+    al_export_p.add_argument("--sot-sheet", help="Hoja específica SOT")
+    al_export_p.add_argument("--log-sheet", help="Hoja específica bitácoras")
+    al_export_p.add_argument("--output", required=True, help="Ruta base de salida (se crea .csv y .json)")
+    al_export_p.add_argument("--strategy", choices=["uncertainty", "margin", "entropy", "diversity", "hybrid", "least_confident", "disagreement"], default="hybrid", help="Estrategia de selección")
+    al_export_p.add_argument("--batch-size", type=int, default=50, help="Casos a exportar")
+    al_export_p.add_argument("--top-k", type=int, default=5, help="Candidatos por SOT")
+    al_export_p.set_defaults(func=cmd_active_export)
+
+    # active-learning import
+    al_import_p = subparsers.add_parser("active-import", help="Importar anotaciones desde CSV/JSON")
+    al_import_p.add_argument("file", help="Archivo CSV o JSON con anotaciones")
+    al_import_p.add_argument("--reviewer", default="active_learning", help="ID del revisor")
+    al_import_p.set_defaults(func=cmd_active_import)
+
+    # active-learning retrain
+    al_retrain_p = subparsers.add_parser("active-retrain", help="Re-entrenar modelo con nuevos datos")
+    al_retrain_p.add_argument("--sot-file", help="Archivo Excel SOT")
+    al_retrain_p.add_argument("--log-file", help="Archivo Excel bitácoras")
+    al_retrain_p.add_argument("--sot-sheet", help="Hoja específica SOT")
+    al_retrain_p.add_argument("--log-sheet", help="Hoja específica bitácoras")
+    al_retrain_p.add_argument("--activate", action="store_true", help="Activar si cumple umbrales")
+    al_retrain_p.set_defaults(func=cmd_active_retrain)
 
     # list
     list_p = subparsers.add_parser("list", help="Listar modelos registrados")
