@@ -14,8 +14,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.isotonic import IsotonicRegression
 from sklearn.model_selection import GroupShuffleSplit
 
 from sot_matcher.application.ports import (
@@ -31,6 +29,13 @@ from sot_matcher.application.ports import (
 )
 from sot_matcher.domain.feedback import FeedbackDecision, FeedbackEvent
 from sot_matcher.domain.matching import MatchingEngine, MatchingSettings
+from sot_matcher.infrastructure.calibration import (
+    CalibrationConfig,
+    CalibrationMetrics,
+    create_calibrator,
+    compute_calibration_metrics,
+    plot_reliability_diagram,
+)
 
 
 @dataclass(frozen=True)
@@ -53,8 +58,7 @@ class TrainConfig:
     random_state: int = 42
     group_by: str = "sot_id"  # evitar fuga por SOT
     classifier_config: dict[str, Any] = None
-    calibrate: bool = True
-    calibration_method: str = "isotonic"  # "isotonic" | "platt" | "none"
+    calibration: CalibrationConfig = field(default_factory=lambda: CalibrationConfig(method="isotonic"))
 
 
 @dataclass(frozen=True)
@@ -221,8 +225,8 @@ class TrainingPipeline:
         report = self._classifier.fit(train_final, val_pairs or train_final)
 
         # Calibrar probabilidades si se solicita
-        if config.calibrate and config.calibration_method != "none":
-            self._calibrate(train_final, val_pairs, config.calibration_method)
+        if config.calibration.method != "none":
+            self._calibrate(train_final, val_pairs, config.calibration)
 
         # Guardar fingerprint del test set en el reporte para poder cargarlo después
         report = TrainingReport(
@@ -232,7 +236,7 @@ class TrainingPipeline:
             val_size=report.val_size,
             test_size=len(test_pairs),
             metrics=report.metrics,
-            config={**report.config, "calibration_method": config.calibration_method, "test_fingerprint": test_fingerprint},
+            config={**report.config, "calibration_method": config.calibration.method, "test_fingerprint": test_fingerprint},
             created_at=report.created_at,
         )
 
@@ -242,34 +246,27 @@ class TrainingPipeline:
         self,
         train_pairs: list[LabeledPair],
         val_pairs: list[LabeledPair],
-        method: str,
+        calibration_config: CalibrationConfig,
     ) -> None:
         """Calibra probabilidades del clasificador usando validation set."""
         if not val_pairs:
             return
 
-        X_val = np.array([[p.features.get(f, 0.0) for f in self._classifier._feature_names] for p in val_pairs])
         y_val = np.array([p.label for p in val_pairs])
-
-        # Obtener probabilidades sin calibrar
         proba = self._classifier.predict_proba([p.features for p in val_pairs])
 
-        if method == "isotonic":
-            self._calibrator = IsotonicRegression(out_of_bounds="clip")
-            self._calibrator.fit(proba, y_val)
-        elif method == "platt":
-            from sklearn.linear_model import LogisticRegression
-            self._calibrator = LogisticRegression(solver="lbfgs", max_iter=1000)
-            self._calibrator.fit(proba.reshape(-1, 1), y_val)
+        # Crear y entrenar calibrador usando el módulo de calibración
+        self._calibrator = create_calibrator(calibration_config)
+        self._calibrator.fit(proba, y_val)
+
+        # Guardar configuración de calibración en el clasificador para persistencia
+        self._calibration_config = calibration_config
 
     def predict_proba_calibrated(self, feature_vectors: list[dict[str, Any]]) -> list[float]:
-        """Predice probabilidades calibradas."""
+        """Predice probabilidades calibradas usando el calibrador del módulo de calibración."""
         raw_proba = self._classifier.predict_proba(feature_vectors)
-        if self._calibrator is not None:
-            if hasattr(self._calibrator, "predict_proba"):
-                return self._calibrator.predict_proba(np.array(raw_proba).reshape(-1, 1))[:, 1].tolist()
-            else:
-                return self._calibrator.predict(np.array(raw_proba)).tolist()
+        if hasattr(self, "_calibrator") and self._calibrator is not None:
+            return self._calibrator.transform(np.array(raw_proba)).tolist()
         return raw_proba
 
     def evaluate(
@@ -309,8 +306,14 @@ class TrainingPipeline:
             "log_loss": float(log_loss(y_true, y_proba)),
         }
 
-        # Calibración metrics
-        calibration_metrics = self._compute_calibration_metrics(y_true, y_proba)
+        # Calibración metrics usando el módulo de calibración
+        cal_metrics = compute_calibration_metrics(np.array(y_true), np.array(y_proba))
+        calibration_metrics = {
+            "ece": cal_metrics.ece,
+            "mce": cal_metrics.mce,
+            "brier_score": cal_metrics.brier_score,
+            "log_loss": cal_metrics.log_loss,
+        }
 
         # Baseline comparison
         baseline_metrics = {}
@@ -439,44 +442,6 @@ class TrainingPipeline:
             "classifier_precision_on_engine": float(precision_score(y_true_engine, y_pred_clf, zero_division=0)),
             "classifier_recall_on_engine": float(recall_score(y_true_engine, y_pred_clf, zero_division=0)),
         }
-
-    def _compute_calibration_metrics(
-        self,
-        y_true: list[int],
-        y_proba: list[float],
-    ) -> dict[str, float]:
-        """Calcula métricas de calibración (ECE, etc.)."""
-        try:
-            # Expected Calibration Error (ECE) con 10 bins
-            n_bins = 10
-            bin_boundaries = np.linspace(0, 1, n_bins + 1)
-            bin_lowers = bin_boundaries[:-1]
-            bin_uppers = bin_boundaries[1:]
-
-            ece = 0.0
-            for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
-                in_bin = (np.array(y_proba) > bin_lower) & (np.array(y_proba) <= bin_upper)
-                prop_in_bin = in_bin.mean()
-                if prop_in_bin > 0:
-                    accuracy_in_bin = np.array(y_true)[in_bin].mean()
-                    avg_confidence_in_bin = np.array(y_proba)[in_bin].mean()
-                    ece += abs(avg_confidence_in_bin - accuracy_in_bin) * prop_in_bin
-
-            # Maximum Calibration Error (MCE)
-            mce = 0.0
-            for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
-                in_bin = (np.array(y_proba) > bin_lower) & (np.array(y_proba) <= bin_upper)
-                if in_bin.any():
-                    accuracy_in_bin = np.array(y_true)[in_bin].mean()
-                    avg_confidence_in_bin = np.array(y_proba)[in_bin].mean()
-                    mce = max(mce, abs(avg_confidence_in_bin - accuracy_in_bin))
-
-            return {
-                "ece": float(ece),
-                "mce": float(mce),
-            }
-        except Exception:
-            return {"ece": -1.0, "mce": -1.0}
 
     def _persist_test_set(self, test_pairs: list[LabeledPair], fingerprint: str) -> None:
         """Persiste test set para reproducibilidad."""

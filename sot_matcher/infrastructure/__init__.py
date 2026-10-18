@@ -20,6 +20,20 @@ from .feature_extractor import SotLogFeatureExtractor
 from .candidate_retriever import SotCandidateRetriever
 from .model_registry import FileModelRegistry
 from .classifier import CatBoostMatchingClassifier
+from .calibration import (
+    BaseCalibrator,
+    TemperatureScaler,
+    IsotonicCalibrator,
+    PlattCalibrator,
+    HistogramBinningCalibrator,
+    IdentityCalibrator,
+    CalibrationConfig,
+    CalibrationMetrics,
+    create_calibrator,
+    compute_calibration_metrics,
+    plot_reliability_diagram,
+    compare_calibration_methods,
+)
 
 __all__ = [
     "read_excel",
@@ -43,4 +57,16 @@ __all__ = [
     "SotCandidateRetriever",
     "FileModelRegistry",
     "CatBoostMatchingClassifier",
+    "BaseCalibrator",
+    "TemperatureScaler",
+    "IsotonicCalibrator",
+    "PlattCalibrator",
+    "HistogramBinningCalibrator",
+    "IdentityCalibrator",
+    "CalibrationConfig",
+    "CalibrationMetrics",
+    "create_calibrator",
+    "compute_calibration_metrics",
+    "plot_reliability_diagram",
+    "compare_calibration_methods",
 ]

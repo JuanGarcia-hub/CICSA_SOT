@@ -9,6 +9,7 @@ import pytest
 from sot_matcher.infrastructure import SqliteFeedbackRepository, SotLogFeatureExtractor, SotCandidateRetriever
 from sot_matcher.infrastructure.embedding import get_embedder
 from sot_matcher.application import TrainingPipeline, TrainConfig, FeedbackFilters
+from sot_matcher.infrastructure.calibration import CalibrationConfig
 from sot_matcher.infrastructure.classifier import CatBoostMatchingClassifier
 from sot_matcher.infrastructure.model_registry import FileModelRegistry
 from sot_matcher.domain.feedback import FeedbackDecision, FeedbackEvent, LabeledPair
@@ -194,7 +195,7 @@ def test_train_and_evaluate(pipeline_components, sample_prepared_data):
         assert "incidencia_exacta" in pair.features
 
     # Entrenar
-    config = TrainConfig(test_size=0.25, val_size=0.0, random_state=42, calibrate=False)
+    config = TrainConfig(test_size=0.25, val_size=0.0, random_state=42, calibration=CalibrationConfig(method="none"))
     report = pipeline.train(pairs, config)
 
     assert report.model_version.startswith("catboost_")
@@ -269,7 +270,7 @@ def test_shadow_evaluation(pipeline_components, sample_prepared_data):
             feedback_ids=(event.feedback_id,),
         ))
 
-    config = TrainConfig(test_size=0.25, val_size=0.0, random_state=42, calibrate=False)
+    config = TrainConfig(test_size=0.25, val_size=0.0, random_state=42, calibration=CalibrationConfig(method="none"))
     pipeline.train(pairs, config)
 
     # Mock results_df del motor actual
@@ -365,7 +366,7 @@ def test_persist_and_load_test_set(pipeline_components, sample_prepared_data):
         ))
 
     # Entrenar (esto persiste el test set)
-    config = TrainConfig(test_size=0.25, val_size=0.0, random_state=42, calibrate=False)
+    config = TrainConfig(test_size=0.25, val_size=0.0, random_state=42, calibration=CalibrationConfig(method="none"))
     report = pipeline.train(pairs, config)
 
     # Cargar test set usando fingerprint del reporte
