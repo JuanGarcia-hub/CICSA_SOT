@@ -18,6 +18,8 @@ from .ports import (
     EvaluationReport,
     ModelMetadata,
 )
+from .feedback_service import FeedbackService, SubmitDecisionCommand, ReviewQueueItem, CandidateReview
+from .training_pipeline import TrainingPipeline, TrainConfig, DatasetReport
 
 __all__ = [
     "CrossingPipeline",
@@ -37,4 +39,11 @@ __all__ = [
     "TrainingReport",
     "EvaluationReport",
     "ModelMetadata",
+    "FeedbackService",
+    "SubmitDecisionCommand",
+    "ReviewQueueItem",
+    "CandidateReview",
+    "TrainingPipeline",
+    "TrainConfig",
+    "DatasetReport",
 ]

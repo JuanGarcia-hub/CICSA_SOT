@@ -1,7 +1,8 @@
 """Aplicación Streamlit: cruce inteligente de SOTs con bitácoras.
 
-Interfaz profesional de tres pasos con detección automática de archivos/hojas,
-corrección manual, búsqueda masiva por lista y exportación Excel.
+Interfaz profesional con detección automática de archivos/hojas,
+corrección manual, búsqueda masiva por lista, exportación Excel,
+y revisión supervisada de asociaciones (feature flag).
 """
 
 from __future__ import annotations
@@ -18,6 +19,14 @@ from sot_matcher import (
     to_excel,
 )
 from sot_matcher.application.massive_search import filter_results, ids_from_file, parse_sot_ids, summarize
+from sot_matcher.infrastructure import SqliteFeedbackRepository, init_db
+from sot_matcher.infrastructure.embedding import get_embedder
+from sot_matcher.application.feedback_service import FeedbackService
+from sot_matcher.infrastructure.feature_extractor import SotLogFeatureExtractor
+from sot_matcher.infrastructure.candidate_retriever import SotCandidateRetriever
+from sot_matcher.infrastructure.model_registry import FileModelRegistry
+from sot_matcher.presentation.pages.review import render_review_page
+from sot_matcher.presentation.pages.models import render_models_page
 
 st.set_page_config(page_title="Cruce SOT · Bitácoras", page_icon="🔎", layout="wide")
 
@@ -116,7 +125,7 @@ html, body, [class*="css"] { font-family: 'Segoe UI', system-ui, -apple-system, 
 .callout strong { color: var(--ink); }
 
 /* Sidebar: sigue el tema claro/oscuro */
-section[data-testid="stSidebar"] { background: var(--bg-sidebar) !important; border-right: 1px solid var(--border); }
+section[data-testid="stSidebar"] { border-right: 1px solid var(--border); }
 section[data-testid="stSidebar"] h1, section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 { color: var(--ink); }
 .sidebar-brand { padding: 6px 0 14px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
 .sidebar-brand .t { font-weight: 800; color: var(--brand); font-size: 1.02rem; letter-spacing: .2px; }
@@ -173,10 +182,12 @@ def header() -> None:
     )
 
 
-def stepper(active: int) -> None:
+def stepper(active: int, total_steps: int = 3) -> None:
     steps = ["Carga de archivos", "Ejecutar cruce", "Resultado"]
+    if st.session_state.get("enable_feedback", False):
+        steps += ["Revisión", "Modelos"]
     classes = []
-    for index in range(3):
+    for index in range(len(steps)):
         if index < active:
             classes.append("done")
         elif index == active:
@@ -206,6 +217,24 @@ def sidebar() -> MatchingSettings:
         use_column_dates = st.checkbox(
             "Incluir fecha de columnas (fecha_instalacion, fechageneracionsot…)", value=True
         )
+
+        st.divider()
+
+        # Feature flag para feedback supervisado
+        enable_feedback = st.checkbox(
+            "🧪 Habilitar revisión supervisada (experimental)",
+            value=st.session_state.get("enable_feedback", False),
+            help="Activa páginas de Revisión y Modelos para feedback humano y modelos supervisados."
+        )
+        st.session_state["enable_feedback"] = enable_feedback
+
+        if enable_feedback:
+            st.caption("🔬 Modo feedback supervisado ACTIVO")
+            if st.button("🔄 Reiniciar feedback DB", width="stretch"):
+                init_db("sot_matcher_feedback.db")
+                st.toast("Base de datos de feedback reinicializada")
+                st.rerun()
+
         st.divider()
         if st.button("🔄 Nueva carga", width="stretch"):
             clear_session()
@@ -428,7 +457,7 @@ def step_massive_search(results: pd.DataFrame) -> None:
         "O pega los SOTs aquí",
         height=140,
         key="pasted_ids",
-        placeholder="90681747 90073467\n90073863 …",
+        placeholder="90681747 90073467\n900073863 …",
     )
     if uploaded is not None:
         ids = ids_from_file(uploaded.getvalue(), uploaded.name)
@@ -463,6 +492,24 @@ def step_massive_search(results: pd.DataFrame) -> None:
     )
 
 
+def get_feedback_service() -> FeedbackService:
+    """Obtiene o crea el servicio de feedback (cached en session_state)."""
+    if "feedback_service" not in st.session_state:
+        repo = SqliteFeedbackRepository("sot_matcher_feedback.db")
+        embedder = get_embedder()
+        extractor = SotLogFeatureExtractor(embedder=embedder)
+        retriever = SotCandidateRetriever(embedder=embedder)
+        st.session_state["feedback_service"] = FeedbackService(repo, extractor, retriever)
+    return st.session_state["feedback_service"]
+
+
+def get_model_registry() -> FileModelRegistry:
+    """Obtiene o crea el registro de modelos (cached en session_state)."""
+    if "model_registry" not in st.session_state:
+        st.session_state["model_registry"] = FileModelRegistry("sot_matcher_feedback.db", "models")
+    return st.session_state["model_registry"]
+
+
 def main() -> None:
     inject_theme()
     settings = sidebar()
@@ -471,16 +518,43 @@ def main() -> None:
 
     results = st.session_state.get("results")
     prepared = st.session_state.get("prepared")
-    active = 0 if prepared is None else 1 if results is None else 2
-    stepper(active)
 
+    # Determinar paso activo
+    base_active = 0 if prepared is None else 1 if results is None else 2
+    total_steps = 3 + (2 if st.session_state.get("enable_feedback", False) else 0)
+    stepper(base_active, total_steps)
+
+    # Paso 1: Carga
     step_load()
     st.divider()
+
+    # Paso 2: Cruce
     step_cross()
     st.divider()
+
+    # Paso 3: Resultado
     step_result()
+
+    # Paso 4: Búsqueda masiva (siempre visible si hay resultados)
     if results is not None:
         step_massive_search(results)
+
+    # Paso 5: Revisión supervisada (solo si feature flag activado y hay resultados)
+    if st.session_state.get("enable_feedback", False) and results is not None and prepared is not None:
+        st.divider()
+        feedback_service = get_feedback_service()
+        render_review_page(
+            feedback_service,
+            results,
+            prepared.sots,
+            prepared.logs,
+        )
+
+    # Paso 6: Modelos (solo si feature flag activado)
+    if st.session_state.get("enable_feedback", False):
+        st.divider()
+        model_registry = get_model_registry()
+        render_models_page(model_registry)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,10 @@ from .excel_reader import (
 from .excel_export import to_excel
 from .embedding import get_embedder, build_embedder, SentenceTransformerEmbedder
 from .feedback_repository import SqliteFeedbackRepository, init_db
+from .feature_extractor import SotLogFeatureExtractor
+from .candidate_retriever import SotCandidateRetriever
+from .model_registry import FileModelRegistry
+from .classifier import CatBoostMatchingClassifier
 
 __all__ = [
     "read_excel",
@@ -35,4 +39,8 @@ __all__ = [
     "SentenceTransformerEmbedder",
     "SqliteFeedbackRepository",
     "init_db",
+    "SotLogFeatureExtractor",
+    "SotCandidateRetriever",
+    "FileModelRegistry",
+    "CatBoostMatchingClassifier",
 ]

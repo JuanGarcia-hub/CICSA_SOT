@@ -1,0 +1,1 @@
+"""Capa de presentación: componentes UI y páginas Streamlit."""

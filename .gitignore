@@ -46,6 +46,9 @@ outputs/
 # Logs
 *.log
 
+# CatBoost training artifacts
+catboost_info/
+
 # Environment
 .env
 .env.local
